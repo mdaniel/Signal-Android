@@ -1,0 +1,157 @@
+version: 2.1
+jobs:
+  build_apk:
+    docker:
+    # this image comes from the ReproducibleBuilds.md document
+    # but we cannot use it due to the following error:
+    #> This typically means the image contains files with UID/GID values that are higher than Docker and CircleCI can use.
+    # - image: whispersystems/signal-android:1.3
+    - image: circleci/android:api-28
+
+    steps:
+    - checkout
+    - restore_cache: &restore_cache
+        keys:
+        - &cache_key v1-signal-android-{{ checksum "build.gradle" }}
+        - v1-signal-android
+
+    - run:
+        name: warm the dependency cache
+        command: ./gradlew --quiet --console plain tasks || true
+
+    - save_cache: &save_cache
+        key: *cache_key
+        paths:
+        - ~/.m2
+        - ~/.gradle
+
+    - restore_cache:
+        <<: *restore_cache
+
+    - run:
+        name: build website apk
+        shell: /bin/bash
+        command: |
+          cleanup() {
+              rm -v pkcs11.password
+          }
+          trap cleanup EXIT INT QUIT TERM
+
+          # avoid using "echo" in case "set -x" is active
+          python3 -c 'import os; fh = open("pkcs11.password", "w"); fh.write(os.getenv("SIGNAL_KEYSTORE_PASSWORD")); fh.close()'
+          # this should be set-x safe since it is protected by $SIGNAL_KEYSTORE_PASSWORD
+          echo "$SIGNAL_KEYSTORE_B64" | base64 --decode > $HOME/.keystore
+          chmod 0600 $HOME/.keystore
+
+          echo 'Removing PKCS#11 in favor of PKCS12 KeyStore' >&2
+          echo "$BUILD_PATCH_B64" | base64 --decode | patch -p1
+
+          # and here's what you came here for
+          echo "$GITHUB_ISSUE_8571_V2" | base64 --decode | patch -p1
+
+          # it appears running the "test" target blows out the memory
+          ./gradlew --console plain --stacktrace --warning-mode all assembleWebsiteRelease
+
+        environment:
+          # this is just b64 encoded to get away from yaml-isms
+          BUILD_PATCH_B64: |
+            ZGlmZiAtLWdpdCBhL2J1aWxkU3JjL3NyYy9tYWluL2phdmEvb3JnL3NpZ25hbC9zaWduaW5n
+            L0Fwa1NpZ25lclV0aWwuamF2YSBiL2J1aWxkU3JjL3NyYy9tYWluL2phdmEvb3JnL3NpZ25h
+            bC9zaWduaW5nL0Fwa1NpZ25lclV0aWwuamF2YQppbmRleCAxNDRkNTVlMTcuLjQ2ZWU0YmFm
+            YiAxMDA2NDQKLS0tIGEvYnVpbGRTcmMvc3JjL21haW4vamF2YS9vcmcvc2lnbmFsL3NpZ25p
+            bmcvQXBrU2lnbmVyVXRpbC5qYXZhCisrKyBiL2J1aWxkU3JjL3NyYy9tYWluL2phdmEvb3Jn
+            L3NpZ25hbC9zaWduaW5nL0Fwa1NpZ25lclV0aWwuamF2YQpAQCAtMzcsOSArMzcsOSBAQCBw
+            dWJsaWMgY2xhc3MgQXBrU2lnbmVyVXRpbCB7CiAKIAogICBwdWJsaWMgQXBrU2lnbmVyVXRp
+            bChTdHJpbmcgcHJvdmlkZXJDbGFzcywgU3RyaW5nIHByb3ZpZGVyQXJndW1lbnQsIFN0cmlu
+            ZyBrZXlTdG9yZVR5cGUsIFN0cmluZyBrZXlTdG9yZVBhc3N3b3JkKSB7Ci0gICAgdGhpcy5w
+            cm92aWRlckNsYXNzICAgID0gcHJvdmlkZXJDbGFzczsKKyAgICB0aGlzLnByb3ZpZGVyQ2xh
+            c3MgICAgPSBudWxsOwogICAgIHRoaXMucHJvdmlkZXJBcmd1bWVudCA9IHByb3ZpZGVyQXJn
+            dW1lbnQ7Ci0gICAgdGhpcy5rZXlTdG9yZVR5cGUgICAgID0ga2V5U3RvcmVUeXBlOworICAg
+            IHRoaXMua2V5U3RvcmVUeXBlICAgICA9ICJQS0NTMTIiOwogICAgIHRoaXMua2V5U3RvcmVQ
+            YXNzd29yZCA9IGtleVN0b3JlUGFzc3dvcmQ7CiAgIH0KIApAQCAtODgsNyArODgsOSBAQCBw
+            dWJsaWMgY2xhc3MgQXBrU2lnbmVyVXRpbCB7CiAgIHByaXZhdGUgQXBrU2lnbmVyLlNpZ25l
+            ckNvbmZpZyBsb2FkS2V5U3RvcmUoU3RyaW5nIGtleVN0b3JlVHlwZSwgU3RyaW5nIGtleVN0
+            b3JlUGFzc3dvcmQpIHRocm93cyBLZXlTdG9yZUV4Y2VwdGlvbiwgSU9FeGNlcHRpb24sIENl
+            cnRpZmljYXRlRXhjZXB0aW9uLCBOb1N1Y2hBbGdvcml0aG1FeGNlcHRpb24sIFVucmVjb3Zl
+            cmFibGVLZXlFeGNlcHRpb24gewogICAgIEtleVN0b3JlIGtleVN0b3JlRW50aXR5ID0gS2V5
+            U3RvcmUuZ2V0SW5zdGFuY2Uoa2V5U3RvcmVUeXBlID09IG51bGwgPyBLZXlTdG9yZS5nZXRE
+            ZWZhdWx0VHlwZSgpIDoga2V5U3RvcmVUeXBlKTsKICAgICBjaGFyW10gICBwYXNzd29yZCAg
+            ICAgICA9IGdldFBhc3N3b3JkKGtleVN0b3JlUGFzc3dvcmQpOwotICAgIGtleVN0b3JlRW50
+            aXR5LmxvYWQobnVsbCwgcGFzc3dvcmQpOworICAgIHRyeSAoamF2YS5pby5GaWxlSW5wdXRT
+            dHJlYW0gc3RyZWFtID0gbmV3IGphdmEuaW8uRmlsZUlucHV0U3RyZWFtKG5ldyBqYXZhLmlv
+            LkZpbGUoU3lzdGVtLmdldGVudigiSE9NRSIpLCAiLmtleXN0b3JlIikpKSB7CisgICAgICBr
+            ZXlTdG9yZUVudGl0eS5sb2FkKHN0cmVhbSwgcGFzc3dvcmQpOworICAgIH0KIAogICAgIEVu
+            dW1lcmF0aW9uPFN0cmluZz4gYWxpYXNlcyAgPSBrZXlTdG9yZUVudGl0eS5hbGlhc2VzKCk7
+            CiAgICAgU3RyaW5nICAgICAgICAgICAgICBrZXlBbGlhcyA9IG51bGw7Cg==
+          GITHUB_ISSUE_8571_V2: |
+            ZGlmZiAtLWdpdCBhL3NyYy9vcmcvdGhvdWdodGNyaW1lL3NlY3VyZXNtcy9tbXMvSW5jb21p
+            bmdMb2xsaXBvcE1tc0Nvbm5lY3Rpb24uamF2YSBiL3NyYy9vcmcvdGhvdWdodGNyaW1lL3Nl
+            Y3VyZXNtcy9tbXMvSW5jb21pbmdMb2xsaXBvcE1tc0Nvbm5lY3Rpb24uamF2YQppbmRleCBh
+            M2M1OGU1NTEuLjM0MTU4ODNjMyAxMDA2NDQKLS0tIGEvc3JjL29yZy90aG91Z2h0Y3JpbWUv
+            c2VjdXJlc21zL21tcy9JbmNvbWluZ0xvbGxpcG9wTW1zQ29ubmVjdGlvbi5qYXZhCisrKyBi
+            L3NyYy9vcmcvdGhvdWdodGNyaW1lL3NlY3VyZXNtcy9tbXMvSW5jb21pbmdMb2xsaXBvcE1t
+            c0Nvbm5lY3Rpb24uamF2YQpAQCAtMjMsNiArMjMsOCBAQCBpbXBvcnQgYW5kcm9pZC5vcy5C
+            dWlsZC5WRVJTSU9OOwogaW1wb3J0IGFuZHJvaWQub3MuQnVpbGQuVkVSU0lPTl9DT0RFUzsK
+            IGltcG9ydCBhbmRyb2lkeC5hbm5vdGF0aW9uLk5vbk51bGw7CiBpbXBvcnQgYW5kcm9pZHgu
+            YW5ub3RhdGlvbi5OdWxsYWJsZTsKKworaW1wb3J0IGFuZHJvaWQub3MuQnVuZGxlOwogaW1w
+            b3J0IGFuZHJvaWQudGVsZXBob255LlNtc01hbmFnZXI7CiBpbXBvcnQgb3JnLnRob3VnaHRj
+            cmltZS5zZWN1cmVzbXMubG9nZ2luZy5Mb2c7CiAKQEAgLTM5LDYgKzQxLDcgQEAgaW1wb3J0
+            IG9yZy50aG91Z2h0Y3JpbWUuc2VjdXJlc21zLnV0aWwuVXRpbDsKIAogaW1wb3J0IGphdmEu
+            aW8uQnl0ZUFycmF5T3V0cHV0U3RyZWFtOwogaW1wb3J0IGphdmEuaW8uSU9FeGNlcHRpb247
+            CitpbXBvcnQgamF2YS51dGlsLkxvY2FsZTsKIGltcG9ydCBqYXZhLnV0aWwuY29uY3VycmVu
+            dC5UaW1lb3V0RXhjZXB0aW9uOwogCiBwdWJsaWMgY2xhc3MgSW5jb21pbmdMb2xsaXBvcE1t
+            c0Nvbm5lY3Rpb24gZXh0ZW5kcyBMb2xsaXBvcE1tc0Nvbm5lY3Rpb24gaW1wbGVtZW50cyBJ
+            bmNvbWluZ01tc0Nvbm5lY3Rpb24gewpAQCAtNzAsNyArNzMsMTIgQEAgcHVibGljIGNsYXNz
+            IEluY29taW5nTG9sbGlwb3BNbXNDb25uZWN0aW9uIGV4dGVuZHMgTG9sbGlwb3BNbXNDb25u
+            ZWN0aW9uIGltcGxlbWUKICAgICB0cnkgewogICAgICAgTW1zQm9keVByb3ZpZGVyLlBvaW50
+            ZXIgcG9pbnRlciA9IE1tc0JvZHlQcm92aWRlci5tYWtlVGVtcG9yYXJ5UG9pbnRlcihnZXRD
+            b250ZXh0KCkpOwogCi0gICAgICBMb2cuaShUQUcsICJkb3dubG9hZGluZyBtdWx0aW1lZGlh
+            IGZyb20gIiArIGNvbnRlbnRMb2NhdGlvbiArICIgdG8gIiArIHBvaW50ZXIuZ2V0VXJpKCkp
+            OworICAgICAgZmluYWwgU3RyaW5nIHRyYW5zYWN0aW9uSWRTdHJpbmcgPSBVdGlsLnRvSXNv
+            U3RyaW5nKHRyYW5zYWN0aW9uSWQpOworICAgICAgTG9nLmkoVEFHLCBTdHJpbmcuZm9ybWF0
+            KExvY2FsZS5FTkdMSVNILCAiRG93bmxvYWRpbmcgc3Vic2NyaXB0aW9uSWQ9JXMgbXVsdGlt
+            ZWRpYSBmcm9tICclcycgW3RyYW5zYWN0aW9uSWQ9JyVzJ10gdG8gJyVzJyIsCisgICAgICAg
+            ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIHN1YnNjcmlwdGlvbklk
+            LAorICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBjb250
+            ZW50TG9jYXRpb24sCisgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAg
+            ICAgICAgIHRyYW5zYWN0aW9uSWRTdHJpbmcsCisgICAgICAgICAgICAgICAgICAgICAgICAg
+            ICAgICAgICAgICAgICAgICAgICAgIHBvaW50ZXIuZ2V0VXJpKCkpKTsKIAogICAgICAgU21z
+            TWFuYWdlciBzbXNNYW5hZ2VyOwogCkBAIC04MCwxMCArODgsMjEgQEAgcHVibGljIGNsYXNz
+            IEluY29taW5nTG9sbGlwb3BNbXNDb25uZWN0aW9uIGV4dGVuZHMgTG9sbGlwb3BNbXNDb25u
+            ZWN0aW9uIGltcGxlbWUKICAgICAgICAgc21zTWFuYWdlciA9IFNtc01hbmFnZXIuZ2V0RGVm
+            YXVsdCgpOwogICAgICAgfQogCisgICAgICBmaW5hbCBCdW5kbGUgY29uZmlnT3ZlcnJpZGVz
+            ID0gc21zTWFuYWdlci5nZXRDYXJyaWVyQ29uZmlnVmFsdWVzKCk7CisKKyAgICAgIGlmIChj
+            b25maWdPdmVycmlkZXMuZ2V0Qm9vbGVhbihTbXNNYW5hZ2VyLk1NU19DT05GSUdfQVBQRU5E
+            X1RSQU5TQUNUSU9OX0lEKSkgeworICAgICAgICBpZiAoY29udGVudExvY2F0aW9uLmVuZHNX
+            aXRoKHRyYW5zYWN0aW9uSWRTdHJpbmcpKSB7CisgICAgICAgICAgTG9nLmkoVEFHLCAiU2tp
+            cHBpbmcgJ2FwcGVuZCB0cmFuc2FjdGlvbiBpZCcgYXMgY29udGVudExvY2F0aW9uIGFscmVh
+            ZHkgZW5kcyB3aXRoIGl0Iik7CisgICAgICAgIH0gZWxzZSB7CisgICAgICAgICAgY29udGVu
+            dExvY2F0aW9uICs9IHRyYW5zYWN0aW9uSWRTdHJpbmc7CisgICAgICAgICAgTG9nLmkoVEFH
+            LCAiQXBwZW5kaW5nIHRyYW5zYWN0aW9uSWQgdG8gY29udGVudExvY2F0aW9uIGF0IHRoZSBk
+            aXJlY3Rpb24gb2YgQ2FycmllckNvbmZpZ1ZhbHVlcy4gTmV3IGxvY2F0aW9uOiAiICsgY29u
+            dGVudExvY2F0aW9uKTsKKyAgICAgICAgfQorICAgICAgfQorCiAgICAgICBzbXNNYW5hZ2Vy
+            LmRvd25sb2FkTXVsdGltZWRpYU1lc3NhZ2UoZ2V0Q29udGV4dCgpLAogICAgICAgICAgICAg
+            ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGNvbnRlbnRMb2NhdGlvbiwKICAgICAg
+            ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICBwb2ludGVyLmdldFVyaSgp
+            LAotICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIG51bGwsCisg
+            ICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgY29uZmlnT3ZlcnJp
+            ZGVzLAogICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgIGdldFBl
+            bmRpbmdJbnRlbnQoKSk7CiAKICAgICAgIHdhaXRGb3JSZXN1bHQoKTsK
+          # GRADLE_OPTS: "-Djava.security.debug=all"
+
+    - save_cache:
+        <<: *save_cache
+        when: always
+
+    - store_artifacts:
+        path: build/outputs/apk/website/release
+
+workflows:
+  version: 2
+  build_release_apk:
+    jobs:
+    - build_apk:
+        # this appears to be ignored; maybe it can't be used on the first workflow job?
+        filters:
+          tags:
+            only: /v.*/
